@@ -2,21 +2,26 @@
 
 
 """
-Convert data read by something like csv.DictReader to GeoJSON on the fly
+Convert data read by something like csv.DictReader to GeoJSON on the fly.
+
+Names are overly verbose for ease of following what does what.
 """
 
 
 import csv
 import logging
 import json
+import sys
 
 import click
 import fiona
+import fiona.transform
 import shapely.geometry
 import shapely.wkt
 
 
-log = logging.getLogger('csv_adapter')
+# Some OGR fields can contain valid data the exceeds the default CSV field size
+csv.field_size_limit(sys.maxsize)
 
 
 def helper_str(val):
@@ -57,6 +62,8 @@ def helper_int(val):
 
     if val is None or val == '':
         return None
+    else:
+        return int(val)
 
 
 def helper_properties_def(properties):
@@ -168,20 +175,20 @@ def dict_reader_as_geojson(dict_reader, geomtype_field, properties=None, skip_fa
     _allowed_geomtypes = ('wkt', 'geojson', 'xy')
 
     # Parse the geometry field definition
-    geom_type, geom_field = geomtype_field.split(':')
+    geom_type, geometry_field = geomtype_field.split(':')
     geom_type = geom_type.lower()
     
     # Fail fast in case streaming from a large file
     if geom_type not in _allowed_geomtypes:
         raise ValueError("Invalid geometry type - must be one of: {gt}".format(gt=_allowed_geomtypes))
-    elif geom_type == 'xy' and ',' not in geom_field:
-        raise ValueError("Geometry type is 'xy' and ',' does not appear in fieldnames: %s" % geom_field)
+    elif geom_type == 'xy' and ',' not in geometry_field:
+        raise ValueError("Geometry type is 'xy' and ',' does not appear in fieldnames: %s" % geometry_field)
 
     for row_num, _row in enumerate(dict_reader):
 
         # Define the properties definition from the first row if the user didn't supply one
         if properties is None:
-            properties = {field: helper_str for field in _row if field not in (None, geom_field)}
+            properties = {field: helper_str for field in _row if field not in (None, geometry_field)}
 
         # skip_failures option only skips failures that occur within this block
         try:
@@ -198,13 +205,13 @@ def dict_reader_as_geojson(dict_reader, geomtype_field, properties=None, skip_fa
 
             # Convert string representation of geometry to a geojson object
             if geom_type == 'wkt':
-                geometry = shapely.geometry.mapping(shapely.wkt.loads(row[geom_field]))
+                geometry = shapely.geometry.mapping(shapely.wkt.loads(row[geometry_field]))
             elif geom_type == 'geojson':
-                geometry = json.loads(row[geom_field])
+                geometry = json.loads(row[geometry_field])
             elif geom_type == 'xy':
                 geometry = {
                     "type": "Point",
-                    "coordinates": [float(row[field]) for field in geom_field.split(',')]
+                    "coordinates": [float(row[field]) for field in geometry_field.split(',')]
                 }
             else:
                 raise ValueError("Invalid geometry type definition: %s" % geom_type)
@@ -220,7 +227,7 @@ def dict_reader_as_geojson(dict_reader, geomtype_field, properties=None, skip_fa
         # Encountered an error
         except Exception as e:
             if skip_failures:
-                log.exception(e)
+                logging.exception(str(e))
             else:
                 raise e
 
@@ -247,70 +254,163 @@ def _newlinejson_reader(infile):
 
 @click.command()
 @click.argument('infile', type=click.File(mode='r'), required=True)
-@click.argument('outfile', default='-', required=True)
+@click.argument('outfile', required=True)
 @click.option(
-    '-sf', '--skip-failures', type=click.BOOL,
+    '-sf', '--skip-failures', is_flag=True, type=click.BOOL,
     help="Skip failures encountered on read and write."
 )
 @click.option(
-    '-r', '--reader', default='csv', type=click.Choice(['csv', 'json', 'newlinejson']),
+    '-r', '--reader', metavar='NAME', default='csv', type=click.Choice(['csv', 'json', 'newlinejson']),
     help="Input data format."
 )
 @click.option(
-    '-f', '--format', '--driver', required=True,
+    '-f', '--format', '--driver', metavar='NAME',
     help="Output driver name."
 )
 @click.option(
-    '-gf', '--geom-field', required=True,
+    '-gf', '--geometry-field', metavar='NAME', required=True,
     help="Geometry field definition as `format:field'."
 )
 @click.option(
-    '-co', '--creation-option', multiple=True,
+    '-co', '--creation-option', metavar='NAME=VAL', multiple=True,
     help="Driver specific creation option as key=val."
 )
 @click.option(
-    '-p', '--property-def', multiple=True,
+    '-p', '--property-definition', metavar='FIELD=TYPE:WIDTH', multiple=True,
     help="Schema property as field=def."
 )
 @click.option(
-    '-crs', '--crs',
+    '-s-crs', '--src_crs', metavar='CRS_DEF',
     help="Specify CRS of input data."
 )
-def main(infile, outfile, creation_option, skip_failures, reader, driver, geom_def, property_def, crs):
+@click.option(
+    '-d-crs', '--dst_crs', metavar='CRS_DEF',
+    help="Specify CRS of output data."
+)
+@click.option(
+    '-sl', '--skip-lines', metavar='N', type=click.INT, default=0,
+    help="Skip N lines."
+)
+@click.option(
+    '-ss', '--subsample', metavar='N', type=click.INT, default=0,
+    help="Only process N lines."
+)
+@click.option(
+    '-gt', '--geometry-type', metavar='TYPE',
+    help="Specify geometry type for output layer."
+)
+def main(infile, outfile, creation_option, skip_failures, reader, driver, geometry_field, property_definition,
+         src_crs, dst_crs, skip_lines, subsample, geometry_type):
 
     """
     Convert delimited vector data to an OGR datasource.
+
+    Print GeoJSON to stdout:
+
+        $ ./delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT
+
+    Convert to a shapefile:
+
+        $ ./delimited2datasource.py sample-data/WV.csv WV.shp -gf wkt:WKT
+
+    Skip 5 lines and only process the next 10:
+
+        $ ./delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT -sl 5 -ss 10
+
+    Reproject geometries:
+
+        $ ./delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT \
+            --src_crs EPSG:4269 --dst_crs EPSG:4326
+
+    Only write two fields but convert one to an int:
+
+        $ ./delimited2datasource.py sample-data/WV.csv - \
+            -gf wkt:WKT -p NAME=str -p STATEFP=int
+
+    Read point data from an x and y columns while casting one field to int and one to float:
+
+        $ ./delimited2datasource.py sample-data/WV.csv - \
+            -gf xy:centroid_x,centroid_y -p COUNTYFP=int -p ALAND=float
     """
 
     def first_plus_iterator(first, iterator):
-        if first:
-            _first = first
-            first = None
-            yield _first
-        else:
-            for item in iterator:
+        yielded_first = False
+        for item in iterator:
+            if not yielded_first:
+                yielded_first = True
+                yield first
+            else:
                 yield item
 
-    creation_option = {co.split('=')[0]: co.split('=')[1] for co in creation_option}
-    properties = {fd.split('=')[0]: fd.split('=')[1] for fd in property_def}
+    if outfile == '-' and driver is not None or len(creation_option) > 0:
+        click.echo("ERROR: Cannot specify driver or creation options if printing to stdout.", err=True)
+        sys.exit(1)
 
-    # Load the input file into a generator that produces one GeoJSON feature per iteration
+    # Convert the input file into an iterable object
     if reader == 'csv':
-        reader = csv.DictReader(infile),
+        reader = csv.DictReader(infile)
     elif reader == 'json':
         reader = json.load(infile)
     elif reader == 'newlinejson':
         reader = _newlinejson_reader(infile)
-    feature_generator = dict_reader_as_geojson(reader, geom_def, properties=helper_properties_def(properties),
+    else:
+        raise ValueError("Invalid reader: `%s'" % reader)
+
+    # If the user doesn't supply any properties then the transformer will automatically generate them from the first
+    # feature.  The first output GeoJSON feature can be cached and a set of Fiona properties can be constructed from it.
+    # Kinda sketchy and could use a re-write
+    properties = {p.split('=')[0]: p.split('=')[1] for p in property_definition}
+    if not properties:
+        generator_properties = None
+    else:
+        generator_properties = helper_properties_def(properties)
+    feature_generator = dict_reader_as_geojson(reader, geometry_field, properties=generator_properties,
                                                skip_failures=skip_failures)
 
-    # Cache the first feature so that
+    # Cache the first feature so we can extract information to build the schema
     first_feature = next(feature_generator)
-    schema = first_feature['geometry']['type']
-    if crs.startswith('+'):
-        schema['']
-    with fiona.open(outfile, 'w', driver=driver, schema=None):
-        pass
+
+    # Build the schema for the output Fiona datasource
+    schema = {co.split('=')[0]: co.split('=')[1] for co in creation_option}
+    if geometry_type is None:
+        geometry_type = first_feature['geometry']['type']
+    if properties is None:
+        properties = {p: 'str' for p in first_feature['properties'].keys()}
+    schema.update(
+        crs=dst_crs,
+        driver=driver,
+        schema={
+            'geometry': geometry_type,
+            'properties': properties
+        }
+    )
+    with fiona.open(outfile, 'w', **schema) if outfile != '-' else sys.stdout as dst:
+
+        for idx, feature in enumerate(first_plus_iterator(first_feature, feature_generator)):
+
+            if idx >= skip_lines:
+
+                # Skip failures block
+                try:
+
+                    feature['geometry'] = fiona.transform.transform_geom(
+                        src_crs, dst_crs, feature['geometry'], antimeridian_cutting=True)
+
+                    if dst is sys.stdout:
+                        click.echo(json.dumps(feature))
+                    else:
+                        dst.write(feature)
+
+                    # Subsample and skip lines are 1 indexing while idx is 0 indexing so add 1 for the comparison since
+                    # its always off
+                    if idx + 1 is subsample + skip_lines:
+                        break
+
+                except Exception as e:
+                    if not skip_failures:
+                        raise e
+
+    sys.exit(0)
 
 
 if __name__ == '__main__':
