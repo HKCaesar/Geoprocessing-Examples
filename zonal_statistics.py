@@ -12,6 +12,7 @@ Names are overly verbose for ease of following what does what.
 import pprint
 import sys
 
+import affine
 import click
 import fiona
 import fiona.transform
@@ -126,17 +127,17 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
         if func is not None and not hasattr(func, '__call__'):
             raise ValueError("Custom function `%s' is not callable: %s" % (name, func))
 
-
-    if all_touched is None and 'Point' in vector.schema['geometry'] or 'Line' in vector.schema['geometry']:
-        all_touched = True
-
+    # User didn't specify which bands - process all
     if bands is None:
         bands = range(1, raster.count + 1)
-    elif len(bands) is 1:
+
+    # User specified a single band but not in a list/tuple - wrap in a list
+    elif isinstance(bands, int):
         bands = [bands]
 
     stats = {}
 
+    # Cache raster and vector CRS and generate a raster bbox geometry
     raster_crs = raster.crs
     vector_crs = vector.crs
     _r_min_x, _r_min_y, _r_max_x, _r_max_y = raster.bounds
@@ -145,67 +146,81 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
     )
 
     # Create a spatial index consisting of the raster block's in the coordinate space
-    window_index = rtree.index.Index()
+    window_index = rtree.index.Index(interleaved=True)
     window_ids = {}
     for idx, block in enumerate(raster.block_windows(window_band)):
-        _y, _x = block[1]
-        y_min, y_max = raster.affine * _y
-        x_min, x_max = raster.affine * _x
-        window_index.insert(idx, (x_min, y_min, x_max, y_max))
+        _row, _col = block[1]
+        row_min, row_max = _row
+        col_min, col_max = _col
+        col_min, row_min = raster.affine * (col_min, row_min)
+        col_max, row_max = raster.affine * (col_max, row_max)
+        window_index.insert(idx, (col_min, row_max, col_max, row_min))
         window_ids[idx] = block
 
     for feature in vector:
 
         # Reproject feature's geometry to the raster's CRS and convert to a shapely geometry
-        geometry = shapely.geometry.asShape(
+        zone_geometry = shapely.geometry.asShape(
             fiona.transform.transform_geom(vector_crs, raster_crs, feature['geometry'], antimeridian_cutting=True))
 
-        feature_stats = {
+        feature_metrics = {
             'outside': False
         }
 
         # Compare feature and raster bboxes to determine if feature is definitely outside.
         # If outside, no need to process.
-        if not geometry.intersects(raster_bounds):
-            feature_stats['outside'] = True
-            stats[feature['id']] = feature_stats
+        if not zone_geometry.intersects(raster_bounds):
+            feature_metrics['outside'] = True
+            stats[feature['id']] = feature_metrics
         else:
 
-            feature_stats['bands'] = {}
+            feature_metrics['bands'] = {}
 
             # Figure out if the geometry is completely contained within the raster
             if contained:
-                feature_stats['contained'] = raster_bounds.contains(geometry)
+                feature_metrics['contained'] = raster_bounds.contains(zone_geometry)
 
-            # Note that the first element of the array is immediately extracted, otherwise the shape would be
-            # 1 dimensional and the first array would be examined 4 more times.
-            iw = [window_ids[id] for id in window_index.intersection(geometry.bounds)]
-            intersecting_windows = np.array([i[1] for i in iw])
+            # Collect all intersecting windows and create a new overall window
+            # This new window is used to read a raster subset
+            intersecting_windows = np.array(
+                [i[1] for i in [window_ids[id] for id in window_index.intersection(zone_geometry.bounds)]])
             min_col = intersecting_windows[:, 0].min()
             max_col = intersecting_windows[:, 0].max()
             min_row = intersecting_windows[:, 1].min()
             max_row = intersecting_windows[:, 1].max()
-            subsample_window = ((min_col, max_col), (min_row, max_row))
-            raster_subset = raster.read(range(1, raster.count + 1), window=subsample_window)
-            rasterized = rasterio.features.rasterize([shapely.geometry.mapping(geometry)], raster_subset[:, 0].shape,
+            subset_window = ((min_col, max_col), (min_row, max_row))
+
+            # Only the bands the user is interested in computing stats against are extracted
+            # Be sure to create a new affine transformation with the upper left coordinates
+            # for the subset raster
+            raster_subset = raster.read(bands, window=subset_window)
+            if not isinstance(raster_subset, np.ma.MaskedArray):
+                raster_subset = np.ma.MaskedArray(raster_subset)
+            _subset_ul_x, _subset_ul_y = raster.affine * (min_row, min_col)
+            subset_affine = affine.Affine(
+                raster.affine.a, raster.affine.b, _subset_ul_x,
+                raster.affine.d, raster.affine.e, _subset_ul_y)
+
+            # Rasterize the geometry and convert to a boolean array
+            rasterized = rasterio.features.rasterize([shapely.geometry.mapping(zone_geometry)],
+                                                     out_shape=raster_subset[0].shape,
+                                                     transform=subset_affine,
                                                      all_touched=all_touched).astype(np.bool)
-            print(feature['id'])
-            print([i[0] for i in iw])
-            print(geometry.bounds)
-            return
-            # print(raster_subset.shape)
-            # print(rasterized.shape)
-            for bidx in bands:
-                fully_masked = raster_subset[:, bidx + 1]
-                fully_masked.mask = (rasterized is False) & (fully_masked.mask is True)
 
-                feature_stats['bands'][bidx] = {}
+            # Compute stats for all
+            # np_bidx is zero indexing
+            for np_bidx in range(raster_subset.shape[0]):
 
+                # Update mask and compute metrics
+                masked_subset = np.ma.masked_array(
+                    raster_subset[np_bidx].data, mask=raster_subset[np_bidx].mask + ~rasterized)
+                # raster_subset[np_bidx].__setmask__(raster_subset[np_bidx].mask + ~rasterized)
+                feature_metrics['bands'][np_bidx + 1] = {}
                 for name, func in metrics.items():
                     if func is not None:
-                        feature_stats['bands'][bidx][name] = func(fully_masked)
+                        feature_metrics['bands'][np_bidx + 1][name] = func(masked_subset)
 
-                stats[feature['id']] = feature_stats
+                stats[feature['id']] = feature_metrics.copy()
 
     return stats
 
@@ -233,7 +248,7 @@ def main(raster, vector, bands, contained, all_touched):
     with fiona.drivers(), rasterio.drivers():
         with rasterio.open(raster) as src_r, fiona.open(vector) as src_v:
             results = zonal_stats_from_raster(src_v, src_r, bands=bands, contained=contained, all_touched=all_touched)
-            click.echo(pprint.pformat(results, indent=4))
+            click.echo(pprint.pformat(results, indent=4, depth=4))
 
     sys.exit(0)
 
