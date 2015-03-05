@@ -23,7 +23,7 @@ import rtree.index
 import shapely.geometry
 
 
-def raster_window_to_geometry(block, affine):
+def raster_window_to_geometry(block, transform):
 
     """
     Given a raster window/block and affine from the same datasource, return
@@ -48,7 +48,7 @@ def raster_window_to_geometry(block, affine):
     return {
         'geometry': {
             'type': 'Polygon',
-            'coordinates': [[affine * pair for pair in
+            'coordinates': [[transform * pair for pair in
                             [x_min, y_min], [x_min, y_max], [x_max, y_max], [x_max, y_min]]]
         }
     }
@@ -226,8 +226,8 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
 
 
 @click.command()
-@click.argument('vector')
 @click.argument('raster')
+@click.argument('vector')
 @click.option(
     '-b', '--bands',
     help="Bands to process as `1' or `1,2,3'."
