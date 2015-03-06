@@ -30,7 +30,10 @@ def main(topology_operation, skip_failures):
     Perform topology operations on GeoJSON features or geometries.
 
     By no means perfect or complete but multiple operations can be chained
-    together with the `-to` flag.
+    together with the `-to` flag.  The result from each operation is passed
+    on to the next in the chain so you can do stuff like compute the centroid
+    for every feature and then immediately buffer it and write that geometry
+    to the output file.
 
     Examples:
 

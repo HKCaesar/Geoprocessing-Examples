@@ -23,57 +23,82 @@ import rtree.index
 import shapely.geometry
 
 
-def raster_window_to_geometry(block, transform):
-
-    """
-    Given a raster window/block and affine from the same datasource, return
-    the window as a GeoJSON geometry in coordinate space.
-
-    Parameters
-    ----------
-    block : list, tuple
-        The window portion of a block item returned by `<raster>.block_windows()`.
-    affine : affine.Affine()
-        An affine transformation instance from the same raster.
-
-    Returns
-    -------
-    dict
-        GeoJSON geometry object in coordinate space.
-    """
-
-    _y, _x = block
-    y_min, y_max = _y
-    x_min, x_max = _x
-    return {
-        'geometry': {
-            'type': 'Polygon',
-            'coordinates': [[transform * pair for pair in
-                            [x_min, y_min], [x_min, y_max], [x_max, y_max], [x_max, y_min]]]
-        }
-    }
-
-
 def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touched=None, custom=None, window_band=0):
 
     """
     Compute zonal statistics for each input feature across all bands of an input
-    raster.  God help ye who supply non-block encoded rasters...
+    raster.  God help ye who supply large non-block encoded rasters or large
+    polygons...
 
-    User can supply their own statistics functions by passing a dictionary to
-    the `custom` parameter.  Keys will be used to apply a name for each custom
-    metric to the output statistics and values must be functions that accept a
-    masked array and be prepare to compute metrics across unmasked values.
+    Input layers are intended to be polygons in and the goal is a routine that can
+    safely take a large raster and large number of polygons that do not span too
+    may raster blocks.  Point layers will work but are not as efficient and
+    should be used with rasterio's `sample()` method, a raster block iterator,
+    and a vector layer bbox filter constructed from every block window. The output
+    metrics would only contain an entry for points that actually intersect the
+    raster but that's easy enough to handle.
+
+    Further optimization could be performed to limit raster I/O for really
+    really large numbers of overlapping polygons but that is outside the
+    intended scope.  With a little bit of work the Fiona datasource dependency
+    could be eliminated by an arbitrary vector iterator/generator and accompanying
+    CRS definition.
+
+    By default min, max, mean, standard deviation and sum are computed but the
+    user can also create their own functions to compute custom metrics across
+    the intersecting area for every feature and every band.  Functions must
+    accept a 2D masked array (extracted from a single band) and return something.
+    Use `custom={'my_metric': my_metric_func}` to call `my_metric_fun` on the
+    intersecting pixels.  A key named `my_metric` will be added alongside `min`,
+    `max`, etc.  Metrics can also be disabled by doing `custom={'min': None}`
+    to turn off the call to `min`.  The `min` key will still be included in the
+    output but will have a value of `None`.
 
     In order to handle raster larger than available memory and vector datasets
     containing a large number of features, the minimum bounding box for each
     feature's geometry is computed and all intersecting raster windows are read.
-    The inverse of the geometry is burned into this subset's mask and
+    The inverse of the geometry is burned into this subset's mask yielding only
+    the values that intersect the feature.  Metrics are then computed against
+    this masked array.
 
     Example output:
 
+        The outer keys are feature ID's
 
+        {
+            '0': {
+                'bands': {
+                    1: {
+                        'max': 244,
+                        'mean': 97.771298771710065,
+                        'min': 15,
+                        'std': 44.252917708519028,
+                        'sum': 15689067
+                    }
+                },
+                'contained': True,
+                'outside': False
+            },
+            '1': {
+                'bands': {
+                    1: {
+                        'max': 240,
+                        'mean': 102.17252754327959,
+                        'min': 14,
+                        'std': 43.650764099201055,
+                        'sum': 26977532
+                    }
+                },
+                'contained': True,
+                'outside': False
+            }
+        }
 
+    Notes
+    -----
+
+    Features where the `outside` key is `False` will not have any additional keys.
+    The `contained` key will only appear in the output if `contained=True`.
 
     Parameters
     ----------
@@ -85,7 +110,7 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
         Specify which band should supply the read windows are extracted from.
         Ideally the windows are identical across all bands.
     custom : dict or None,
-        Supply custom functions.
+        Supply custom functions as `{'name': func}`.
     bands : int or list or None, optional
         Bands to compute stats against.  Default is all.
     contained : bool, optional
@@ -97,18 +122,7 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
     Returns
     -------
     dict
-        {
-            'id': int,  # Vector feature ID
-            'outside': bool,  # True if feature is entirely outside raster
-            'contained': bool,  # True if feature is partially outside raster.
-                                # If `contained=False` it will not be included
-                                # in the output
-            'mean': float,
-            'min': float or int,
-            'max': float or int,
-            'sum': float or int,
-            'std': float,
-        }
+        See 'Example output' above.
     """
 
     metrics = {
@@ -130,10 +144,10 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
     # User didn't specify which bands - process all
     if bands is None:
         bands = range(1, raster.count + 1)
-
-    # User specified a single band but not in a list/tuple - wrap in a list
     elif isinstance(bands, int):
         bands = [bands]
+    else:
+        bands = sorted(bands)  # Otherwise the output stats could be in the wrong order
 
     stats = {}
 
@@ -193,6 +207,7 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
             # Only the bands the user is interested in computing stats against are extracted
             # Be sure to create a new affine transformation with the upper left coordinates
             # for the subset raster
+
             raster_subset = raster.read(bands, window=subset_window)
             if not isinstance(raster_subset, np.ma.MaskedArray):
                 raster_subset = np.ma.MaskedArray(raster_subset)
@@ -207,18 +222,20 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
                                                      transform=subset_affine,
                                                      all_touched=all_touched).astype(np.bool)
 
-            # Compute stats for all
+            # Compute stats for all specified bands
             # np_bidx is zero indexing
-            for np_bidx in range(raster_subset.shape[0]):
+            band_map = dict(zip(bands, range(raster_subset.shape[0])))
+            for bidx in bands:
+
+                np_bidx = band_map[bidx]
 
                 # Update mask and compute metrics
                 masked_subset = np.ma.masked_array(
                     raster_subset[np_bidx].data, mask=raster_subset[np_bidx].mask + ~rasterized)
-                # raster_subset[np_bidx].__setmask__(raster_subset[np_bidx].mask + ~rasterized)
-                feature_metrics['bands'][np_bidx + 1] = {}
+                feature_metrics['bands'][bidx] = {}
                 for name, func in metrics.items():
                     if func is not None:
-                        feature_metrics['bands'][np_bidx + 1][name] = func(masked_subset)
+                        feature_metrics['bands'][bidx][name] = func(masked_subset)
 
                 stats[feature['id']] = feature_metrics.copy()
 
@@ -240,15 +257,41 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
     '-c', '--contained', is_flag=True,
     help="Enable 'contained' test."
 )
-def main(raster, vector, bands, contained, all_touched):
+@click.option(
+    '-npp', '--no-pretty-print', is_flag=True,
+    help="Print stats JSON on one line."
+)
+@click.option(
+    '--indent', type=click.INT, default=0,
+    help="Pretty print indent."
+)
+def main(raster, vector, bands, contained, all_touched, no_pretty_print, indent):
+
+    """
+    Get raster stats for every feature in a vector datasource.
+
+    Only compute against the first two bands:
+
+        $ ./zonal-statistics.py sample-data/NAIP.tif \
+                sample-data/polygon-samples.geojson -b 1,2
+
+    Compute against all bands and also perform a check to see if a geometry is
+    completely contained within the raster bbox:
+
+        $ ./zonal-statistics.py sample-data/NAIP.tif \
+                sample-data/polygon-samples.geojson --contained
+    """
 
     if bands is not None:
-        bands = bands.split(',')
+        bands = sorted([int(i) for i in bands.split(',')])
 
     with fiona.drivers(), rasterio.drivers():
         with rasterio.open(raster) as src_r, fiona.open(vector) as src_v:
+
             results = zonal_stats_from_raster(src_v, src_r, bands=bands, contained=contained, all_touched=all_touched)
-            click.echo(pprint.pformat(results, indent=4, depth=4))
+            if not no_pretty_print:
+                results = pprint.pformat(results, indent=indent)
+            click.echo(results)
 
     sys.exit(0)
 
