@@ -146,17 +146,28 @@ The `contained` key will only appear in the output if `contained=True`.
 ### Parameters ###
 
 vector : <fiona feature collection>
+
     Vector datasource.
+    
 raster : <rasterio RasterReader>
+
     Raster datasource.
+    
 window_band : int, optional
+
     Specify which band should supply the read windows are extracted from.
     Ideally the windows are identical across all bands.
+    
 custom : dict or None,
+
     Supply custom functions as `{'name': func}`.
+    
 bands : int or list or None, optional
+
     Bands to compute stats against.  Default is all.
+    
 contained : bool, optional
+
     Specify if geometries should be tested to see if they fall completely
     within the raster.  Can be a very expensive computation for geometries
     with a large number of vertexes.  Setting to `False` will yield a
@@ -249,14 +260,21 @@ Valid `geomtype_field` definitions:
 ### Parameters ###
 
 dict_reader : csv.DictReader (or other iterable object returning dicts)
+
     A loaded instance configured with whatever settings the user desires.
+    
 skip_failures : bool, optional
+
     If `True` and an exception is encountered while iterating over rows, that
     row will be skipped and the exception will be logged.  If `False` the
     exception is raised.
+    
 geomtype_field : str
+
     Geometry type and field description.
+    
 properties : dict, optional
+
     Keys are fieldnames in the CSV and vals are functions used to cast the
     values to a Python type.  If `None` then all fields are converted to
     strings.  Fields that are `None` or are specified in the
