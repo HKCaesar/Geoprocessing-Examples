@@ -1,3 +1,4 @@
 shapely
 fiona
 rasterio
+str2type
