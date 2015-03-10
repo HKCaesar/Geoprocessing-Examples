@@ -56,3 +56,9 @@ target/
 
 # JetBrains PyCharm
 .idea/
+
+# Large binary files
+*.las
+
+# ipython
+.ipynb*
