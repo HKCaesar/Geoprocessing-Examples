@@ -38,19 +38,22 @@ def main(topology_operation, skip_failures):
     Examples:
 
         Buffer geometries 15 meters:
-        $ fio cat sample-data/polygon-samples.geojson | \
-            ./streaming-topology-operations.py \
-            -to buffer:distance=15
+
+        $ fio cat sample-data/polygon-samples.geojson \
+            | ./streaming-topology-operations.py \
+                -to buffer:distance=15
 
         Compute geometry centroid and buffer that by 100 meters:
-        $ fio cat sample-data/polygon-samples.geojson | \
-            ./streaming-topology-operations.py \
-            -to centroid -to buffer:distance=100
+
+        $ fio cat sample-data/polygon-samples.geojson \
+            | ./streaming-topology-operations.py \
+                -to centroid -to buffer:distance=100
 
         Compute geometry centroid, buffer 20 meters, and compute envelope:
-        $ fio cat sample-data/polygon-samples.geojson | \
-            ./streaming-topology-operations.py \
-            -to centroid -to buffer:distance=20 -to envelope
+
+        $ fio cat sample-data/polygon-samples.geojson \
+            | ./streaming-topology-operations.py \
+                -to centroid -to buffer:distance=20 -to envelope
 
     To dump to a file pipe to `fio load`.
     """
