@@ -46,10 +46,19 @@ import scipy.interpolate
     '-i', '--interpolation', type=click.Choice(['nearest', 'linear', 'cubic']), default='nearest',
     help="Interpolation method."
 )
-def rasterize_z(lidar, raster, target_res, target_size, crs, driver, creation_option, interpolation):
+@click.option(
+    '-kr', '--keep-return', type=click.INT, metavar='INT',
+    help="Process points with the specified return number."
+)
+@click.option(
+    '-kc', '--keep-class', type=click.INT, metavar='INT',
+    help="Process points with the specified classification."
+)
+def rasterize_z(lidar, raster, target_res, target_size, crs, driver, creation_option, interpolation,
+                keep_class, keep_return):
 
     """
-    Convert LiDAR to an elevation model.
+    Grid LiDAR into a raster.  Currently only Z values are
     """
 
     # Validate arguments and convert to pixel space (Y, X)
@@ -87,18 +96,34 @@ def rasterize_z(lidar, raster, target_res, target_size, crs, driver, creation_op
         meta.update({co.split('=')[0]: co.split('=')[1] for co in creation_option})
         with rasterio.open(raster, 'w', **meta) as raster:
 
+            X = las.x
+            Y = las.y
+            Z = las.z
+
+            # This could be WAY fancier
+            if keep_class is not None:
+                classification = las.classification
+                X = X[classification == keep_class]
+                Y = Y[classification == keep_class]
+                Z = Z[classification == keep_class]
+            if keep_return is not None:
+                return_num = las.return_num
+                X = X[return_num == keep_return]
+                Y = Y[return_num == keep_return]
+                Z = Z[return_num == keep_return]
+
             # Ideally the user would have access to a triangulation routine as well but this is the
             # quick and dirty method.  Triangulation would let the user specify max leg length for
             # better anti-aliasing and better vegetation representation if it supports finding the nearest
             # neighbor in 3D instead of just 2D.  Nodata areas are filled so water contains a lot of nonsense
             # values, which isn't terrible except that they stretch out from shoreline vegetation to create large
             # elevated triangles.
-            xi = np.linspace(las.x.min(), las.x.max(), raster.meta['width'])
-            yi = np.linspace(las.y.min(), las.y.max(), raster.meta['height'])
+            xi = np.linspace(X.min(), X.max(), raster.meta['width'])
+            yi = np.linspace(Y.min(), Y.max(), raster.meta['height'])
             gridded = scipy.interpolate.griddata(
-                points=(las.x, las.y),
-                values=las.z,
-                xi=(xi[None,:], yi[:,None]),
+                points=(X, Y),
+                values=Z,
+                xi=(xi[None, :], yi[:, None]),
                 method=interpolation,
                 fill_value=raster.meta['nodata'],
             )[::-1]  # For some reason the entire array is flipped across the the X axis???
