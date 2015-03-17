@@ -1,4 +1,12 @@
-shapely
-fiona
+click
+Fiona
+ipython[all]
+laspy
+matplotlib
+numpy
 rasterio
+Rtree
+scikit-image
+scipy
+Shapely
 str2type
