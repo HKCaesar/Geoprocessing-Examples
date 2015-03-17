@@ -107,19 +107,18 @@ def helper_properties_def(properties):
 def dict_reader_as_geojson(dict_reader, geomtype_field, properties=None, skip_failures=False, empty_is_none=True):
 
     """
-    Generator to read a CSV containing vector data and convert to GeoJSON on
+    A generator to read a CSV containing vector data and convert to GeoJSON on
     the fly.  Geometry can be supplied as WKT, GeoJSON, or points with X and
     Y stored in different fields.
 
     The user supplies an iterable, like an instance of `csv.DictReader()`, that
     provides one dictionary per iteration that is converted on the fly to a
     GeoJSON object and yielded to the parent process.  The user can specify
-    which field contains the geometry and what kind of geometry representation
-    it contains.
+    the geometry field and what kind of geometry representation it contains.
 
     All keys except `None` or the geometry field are included in the output
-    features but the user can specify what fields to include and what type
-    they should be cast to via the `properties` parameter.  If set to `None`
+    features but the user can take control over what fields are included and
+    what type they are cast to via the `properties` parameter.  If set to `None`
     all fields are included in the output feature but if set to a dictionary
     where keys are fieldnames and values are functions then only the fields
     specified in the keys are included in the output.  The functions must
@@ -130,8 +129,11 @@ def dict_reader_as_geojson(dict_reader, geomtype_field, properties=None, skip_fa
     Helper functions have been included to make creating a `properties`
     definition containing `str`, `float`, or `int` easier.  They are prefixed
     with `helper_` and `helper_properties_def` takes a set of Fiona properties
-    and returns a definition suitable for the `properties` parameter that uses
-    the helper functions.
+    and returns a definition constructed with the helpers that is suitable for
+    the `properties` parameter.  The primary job of these helper functions is to
+    return `None` when they encounter an empty string or `None`.  If the standard
+    Python `int, float, etc.` functions were used then exceptions would constantly
+    be raised.
 
     Example `properties` definition:
 

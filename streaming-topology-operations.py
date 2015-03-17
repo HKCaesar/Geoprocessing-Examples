@@ -27,7 +27,11 @@ from str2type import str2type
 def main(topology_operation, skip_failures):
 
     """
-    Perform topology operations on GeoJSON features or geometries.
+    Perform Shapely topology operations on GeoJSON features or geometries.
+
+    Topology operations are methods or properties available to
+    `shapely.geometry.base.BaseGeometry` that returns a geometry and does
+    not require a geometry as an argument.
 
     By no means perfect or complete but multiple operations can be chained
     together with the `-to` flag.  The result from each operation is passed
@@ -39,23 +43,41 @@ def main(topology_operation, skip_failures):
 
         Buffer geometries 15 meters:
 
+        \b
         $ fio cat sample-data/polygon-samples.geojson \
+        \b
             | ./streaming-topology-operations.py \
+        \b
                 -to buffer:distance=15
 
         Compute geometry centroid and buffer that by 100 meters:
 
+        \b
         $ fio cat sample-data/polygon-samples.geojson \
+        \b
             | ./streaming-topology-operations.py \
+        \b
                 -to centroid -to buffer:distance=100
 
         Compute geometry centroid, buffer 20 meters, and compute envelope:
 
+        \b
         $ fio cat sample-data/polygon-samples.geojson \
+        \b
             | ./streaming-topology-operations.py \
+        \b
                 -to centroid -to buffer:distance=20 -to envelope
 
-    To dump to a file pipe to `fio load`.
+        Read, transform, write:
+
+        \b
+        $ fio cat sample-data/tl_2014_54037_roads.geojson \
+        \b
+            | ./streaming-topology-operations.py -to buffer:distance=3 \
+        \b
+            | fio load sample-data/buffered/tl_2014_54037_roads.geojson \
+        \b
+                -f GeoJSON --sequence --src_crs EPSG:32618 --dst_crs EPSG:32618
     """
 
     # Parse topology operations into a more usable format

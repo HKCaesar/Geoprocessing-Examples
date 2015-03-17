@@ -30,29 +30,30 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
     raster.  God help ye who supply large non-block encoded rasters or large
     polygons...
 
-    Input layers are intended to be polygons in and the goal is a routine that can
-    safely take a large raster and large number of polygons that do not span too
-    may raster blocks.  Point layers will work but are not as efficient and
-    should be used with rasterio's `sample()` method, a raster block iterator,
-    and a vector layer bbox filter constructed from every block window. The output
-    metrics would only contain an entry for points that actually intersect the
-    raster but that's easy enough to handle.
-
-    Further optimization could be performed to limit raster I/O for really
-    really large numbers of overlapping polygons but that is outside the
-    intended scope.  With a little bit of work the Fiona datasource dependency
-    could be eliminated by an arbitrary vector iterator/generator and accompanying
-    CRS definition.
-
     By default min, max, mean, standard deviation and sum are computed but the
     user can also create their own functions to compute custom metrics across
     the intersecting area for every feature and every band.  Functions must
-    accept a 2D masked array (extracted from a single band) and return something.
-    Use `custom={'my_metric': my_metric_func}` to call `my_metric_fun` on the
+    accept a 2D masked array extracted from a single band.  Should probably
+    be changed to allow the user to compute statistics across all bands.
+
+    Use `custom={'my_metric': my_metric_func}` to call `my_metric_func` on the
     intersecting pixels.  A key named `my_metric` will be added alongside `min`,
     `max`, etc.  Metrics can also be disabled by doing `custom={'min': None}`
     to turn off the call to `min`.  The `min` key will still be included in the
     output but will have a value of `None`.
+
+    While this function will work with any geometry type the input is intended
+    to be polygons.  The goal of this function is to be able to take large
+    rasters and a large number of not too giant polygons and be pretty confident
+    that nothing is going to break.  There are better methods for collecting
+    statistics if the goal is speed or by optimizing for each datatype. Point
+    layers will work but are not as efficient and should be used with rasterio's
+    `sample()` method, and an initial pass to index points against the raster's
+    blocks.
+
+    Further optimization could be performed to limit raster I/O for really
+    really large numbers of overlapping polygons but that is outside the
+    intended scope.
 
     In order to handle raster larger than available memory and vector datasets
     containing a large number of features, the minimum bounding box for each
