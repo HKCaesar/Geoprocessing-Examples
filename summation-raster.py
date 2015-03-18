@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 
 
+"""
+Compute a density map for input geometries or sum a property.
+"""
+
+
 from __future__ import division
 
 import click
@@ -55,16 +60,72 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
          property_name, all_touched):
 
     """
-    geotransform = (-237481.5, 425.0, 0.0, 237536.4, 0.0, -425.0)
+    Creation a geometry density map or sum a property.
 
-    In [2]: import affine
+    When summing a property every pixel that intersects a geometry has the value
+    of the specified property added to the pixel, which also means that negative
+    values will be subtracted - the overall net value is written to the output
+    raster.
 
-    In [3]: a = affine.Affine.from_gdal(*geotransform)
+    Given two partially overlapping polygons A and B where A has a value of 1
+    and B has a value of 2, pixels in the overlapping area will have a value of
+    3, pixels in polygon A will have a value of 1, and pixels in polygon B will
+    have a value of 2.  See below:
 
-    In [4]: a
-    Out[4]:
-    Affine(425.0, 0.0, -237481.5,
-           0.0, -425.0, 237536.4)
+    \b
+    Sum a property:
+    \b
+            A = 1
+            B = 2
+    \b
+                    B
+                    +------------+
+            A       |222222222222|
+            +-------+---+22222222|
+            |1111111|333|22222222|
+            |1111111|333|22222222|
+            |1111111+---+--------+
+            +-----------+
+
+    \b
+    Compute density:
+    \b
+                    B
+                    +------------+
+            A       |111111111111|
+            +-------+---+11111111|
+            |1111111|222|11111111|
+            |1111111|222|11111111|
+            |1111111+---+--------+
+            +-----------+
+
+    Examples:
+
+        Create a point density raster at a 10 meter resolution:
+
+        \b
+            $ summation-raster.py sample-data/point-sample.geojson OUT.tif \
+        \b
+                --creation-option TILED=YES \
+        \b
+                --target-resolution 10
+
+        Sum a proeprty at a 100 meter resolution
+
+        \b
+            $ summation-raster.py sample-data/point-sample.geojson OUT.tif \
+        \b
+                --creation-option TILED=YES \
+        \b
+                --target-resolution 100 \
+        \b
+                --property ID
+
+    NOTE: Point layers work well but other types are raising the error below but
+          all geometry types should work in theory.
+
+        Assertion failed: (0), function query, file AbstractSTRtree.cpp, line 285.
+        Abort trap: 6
     """
 
     target_resolution = [abs(v) for v in target_resolution]
@@ -114,6 +175,8 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
 
                         if property_name is not None:
                             add_val = feature['properties'][property_name]
+                            if add_val is None:
+                                add_val = 0
                         else:
                             add_val = 1
 
@@ -123,33 +186,34 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
                                 point_col, point_row = (int(_i) for _i in ~dst.affine * point[:2])
                                 block[point_row - row_min][point_col - col_min] += add_val
                         else:
-                            for geometry in feature['geometry']['coordinates'] if 'Multi' not in geom_type else [feature['geometry']['coordinates']]:
+                            for geometry in feature['geometry']['coordinates'] if 'Multi' in geom_type else [feature['geometry']]:
 
                                 # Clip the input geometry to the raster block window
                                 window_geometry = asShape({
                                         'type': 'Polygon',
                                         'coordinates': [[[x_min, y_min], [x_min, y_max], [x_max, y_max], [x_max, y_min]]]
                                     })
-                                clipped = asShape(geometry).intersection(window_geometry)
+                                g = asShape(geometry)
+                                if g.intersects(window_geometry):
+                                    clipped = window_geometry.union(g)
 
-                                # Create a new affine transformation for this subset window
-                                _subset_ul_x, _subset_ul_y = dst.affine * (row_min, col_min)
-                                subset_affine = affine.Affine(
-                                    dst.affine.a, dst.affine.b, _subset_ul_x,
-                                    dst.affine.d, dst.affine.e, _subset_ul_y)
+                                    # Create a new affine transformation for this subset window
+                                    _subset_ul_x, _subset_ul_y = dst.affine * (row_min, col_min)
+                                    subset_affine = affine.Affine(
+                                        dst.affine.a, dst.affine.b, _subset_ul_x,
+                                        dst.affine.d, dst.affine.e, _subset_ul_y)
 
-                                # Rasterize polygon
-                                rasterizd = rasterize(
-                                    shapes=[clipped],
-                                    out_shape=block.shape,
-                                    transform=subset_affine,
-                                    all_touched=all_touched,
-                                    default_value=1 if property_name is None else feature['properties'][property_name],
-                                    dtype=dst.meta['dtype']
-                                )
+                                    # Rasterize polygon
+                                    rasterized = rasterize(
+                                        shapes=[clipped],
+                                        out_shape=block.shape,
+                                        transform=subset_affine,
+                                        all_touched=all_touched,
+                                        default_value=1 if property_name is None else feature['properties'][property_name],
+                                        dtype=dst.meta['dtype']
+                                    )
 
-                                block += rasterizd
-
+                                    block += rasterized
                         block[block == 0.0] = nodata
                         dst.write_band(1, block.astype(dst.meta['dtype']), window=((row_min, row_max), (col_min, col_max)))
 

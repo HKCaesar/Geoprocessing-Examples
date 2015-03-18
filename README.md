@@ -131,6 +131,63 @@ the values that intersect the feature.  Metrics are then computed against
 this masked array.
 
 
+Summation Raster
+----------------
+
+Creation a geometry density map or sum a property.
+
+When summing a property every pixel that intersects a geometry has the value
+of the specified property added to the pixel.  So, given two partially
+overlapping polygons A and B where A has a value of 1 and B has a value of 2,
+pixels in the overlapping area will have a value of 3, pixels in polygon A will
+have a value of 1, and pixels in polygon B will have a value of 2.  See below:
+
+Sum a property:
+
+        A = 1
+        B = 2
+                B
+                +------------+
+        A       |222222222222|
+        +-------+---+22222222|
+        |1111111|333|22222222|
+        |1111111|333|22222222|
+        |1111111+---+--------+
+        +-----------+
+
+Compute density:
+
+                B
+                +------------+
+        A       |111111111111|
+        +-------+---+11111111|
+        |1111111|222|11111111|
+        |1111111|222|11111111|
+        |1111111+---+--------+
+        +-----------+
+
+Examples:
+
+    Create a point density raster at a 10 meter resolution:
+
+        $ summation-raster.py sample-data/point-sample.geojson OUT.tif \
+            --creation-option TILED=YES \
+            --target-resolution 10
+
+    Sum a proeprty at a 100 meter resolution
+
+        $ summation-raster.py sample-data/point-sample.geojson OUT.tif \
+            --creation-option TILED=YES \
+            --target-resolution 100 \
+            --property ID
+
+NOTE: Point layers work well but other types are raising the error below but
+      all geometry types should work in theory.
+
+    Assertion failed: (0), function query, file AbstractSTRtree.cpp, line 285.
+    Abort trap: 6
+
+
 Delimited Dataset to Vector Datasource
 -------------------------------------
 
