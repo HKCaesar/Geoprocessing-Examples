@@ -4,6 +4,12 @@ Geoprocessing Examples
 The included geoprocessing examples are not complete, rigorously tested, or to
 be trusted in a production environment and are only meant to be examples.
 
+Sample data sources:
+
+* LAZ - [USGS Earth Explorer](http://earthexplorer.usgs.gov)
+* Roads, hydrography, and political boundaries - [U.S. Census Bureau](https://www.census.gov/geo/maps-data/data/tiger-line.html)
+* NAIP - [NRCS Data Gateway](http://datagateway.nrcs.usda.gov)
+
 
 Setup
 -----
