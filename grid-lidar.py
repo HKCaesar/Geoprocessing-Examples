@@ -58,7 +58,10 @@ def rasterize_z(lidar, raster, target_res, target_size, crs, driver, creation_op
                 keep_class, keep_return):
 
     """
-    Grid LiDAR into a raster.  Currently only Z values are
+    Grid LiDAR into a raster.
+
+    Currently only Z values can be gridded and point filtering could be much
+    more sophisticated but its a proof of concept.
     """
 
     # Validate arguments and convert to pixel space (Y, X)

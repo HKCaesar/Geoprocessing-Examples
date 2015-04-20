@@ -2,7 +2,7 @@
 
 
 """
-Compute a density map for input geometries or sum a property.
+Compute a density raster for input geometries or sum a property.
 """
 
 
@@ -98,31 +98,23 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
             |1111111|222|11111111|
             |1111111+---+--------+
             +-----------+
+    \b
+    Create a point density raster at a 10 meter resolution:
+    \b
+        $ summation-raster.py sample-data/point-sample.geojson OUT.tif \\
+            --creation-option TILED=YES \\
+            --target-resolution 10
+    \b
+    Sum a property at a 100 meter resolution
+    \b
+        $ summation-raster.py sample-data/point-sample.geojson OUT.tif \\
+            --creation-option TILED=YES \\
+            --target-resolution 100 \\
+            --property ID
 
-    Examples:
-
-        Create a point density raster at a 10 meter resolution:
-
-        \b
-            $ summation-raster.py sample-data/point-sample.geojson OUT.tif \
-        \b
-                --creation-option TILED=YES \
-        \b
-                --target-resolution 10
-
-        Sum a proeprty at a 100 meter resolution
-
-        \b
-            $ summation-raster.py sample-data/point-sample.geojson OUT.tif \
-        \b
-                --creation-option TILED=YES \
-        \b
-                --target-resolution 100 \
-        \b
-                --property ID
-
-    NOTE: Point layers work well but other types are raising the error below but
-          all geometry types should work in theory.
+    \b
+    NOTE: Point layers work well but other types are raising the error below. All
+          geometry types will work once this is fixed.
 
         Assertion failed: (0), function query, file AbstractSTRtree.cpp, line 285.
         Abort trap: 6

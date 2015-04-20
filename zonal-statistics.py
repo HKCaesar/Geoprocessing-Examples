@@ -271,16 +271,17 @@ def main(raster, vector, bands, contained, all_touched, no_pretty_print, indent)
     """
     Get raster stats for every feature in a vector datasource.
 
+    \b
     Only compute against the first two bands:
-
-        $ ./zonal-statistics.py sample-data/NAIP.tif \
-                sample-data/polygon-samples.geojson -b 1,2
-
+    \b
+        $ zonal-statistics.py sample-data/NAIP.tif \\
+            sample-data/polygon-samples.geojson -b 1,2
+    \b
     Compute against all bands and also perform a check to see if a geometry is
     completely contained within the raster bbox:
-
-        $ ./zonal-statistics.py sample-data/NAIP.tif \
-                sample-data/polygon-samples.geojson --contained
+    \b
+        $ zonal-statistics.py sample-data/NAIP.tif \\
+            sample-data/polygon-samples.geojson --contained
     """
 
     if bands is not None:

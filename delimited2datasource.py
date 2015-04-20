@@ -305,33 +305,34 @@ def main(infile, outfile, creation_option, skip_failures, reader, driver, geomet
          src_crs, dst_crs, skip_lines, subsample, geometry_type):
 
     """
-    Convert delimited vector data to an OGR datasource.
+    Convert delimited vector data to an OGR datasource supported by Fiona.
 
+    \b
     Print GeoJSON to stdout:
-
-        $ ./delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT
-
+    \b
+        $ delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT
+    \b
     Convert to a shapefile:
-
-        $ ./delimited2datasource.py sample-data/WV.csv WV.shp -gf wkt:WKT
-
+    \b
+        $ delimited2datasource.py sample-data/WV.csv WV.shp -gf wkt:WKT
+    \b
     Skip 5 lines and only process the next 10:
-
-        $ ./delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT -sl 5 -ss 10
-
+    \b
+        $ delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT -sl 5 -ss 10
+    \b
     Reproject geometries:
-
-        $ ./delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT \
+    \b
+        $ delimited2datasource.py sample-data/WV.csv - -gf wkt:WKT \\
             --src_crs EPSG:4269 --dst_crs EPSG:4326
-
+    \b
     Only write two fields but convert one to an int:
-
-        $ ./delimited2datasource.py sample-data/WV.csv - \
+    \b
+        $ delimited2datasource.py sample-data/WV.csv - \\
             -gf wkt:WKT -p NAME=str -p STATEFP=int
-
+    \b
     Read point data from an x and y columns while casting one field to int and one to float:
-
-        $ ./delimited2datasource.py sample-data/WV.csv - \
+    \b
+        $ delimited2datasource.py sample-data/WV.csv - \\
             -gf xy:centroid_x,centroid_y -p COUNTYFP=int -p ALAND=float
     """
 
