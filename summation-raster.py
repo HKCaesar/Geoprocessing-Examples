@@ -13,31 +13,48 @@ import affine
 import fiona as fio
 import numpy as np
 import rasterio as rio
-import rasterio.dtypes as rio_dtypes
+import rasterio.dtypes
 from rasterio.features import rasterize
 from shapely.geometry import asShape
+import str2type.ext
+
+
+def _cb_res(ctx, param, value):
+
+    target_resolution = [abs(v) for v in value]
+    if len(target_resolution) is 1:
+        x_res = target_resolution[0]
+        y_res = target_resolution[0]
+    elif len(target_resolution) is 2:
+        x_res, y_res = target_resolution
+    else:
+        raise click.ClickException("Can only specify target resolution twice - receive %s "
+                                   "values: %s" % (len(target_resolution), target_resolution))
+
+
 
 
 @click.command()
 @click.argument('infile')
 @click.argument('outfile')
 @click.option(
-    '-f', '--format', '--driver', 'driver_name', metavar='NAME', default='GTiff',
+    '-f', '--format', 'driver_name', metavar='NAME', default='GTiff',
     help="Output raster driver."
 )
 @click.option(
-    '-co', '--creation-option', metavar='NAME=VAL', multiple=True,
-    help="Output raster creation options."
+    '-co', '--creation-option', metavar='NAME=VAL', callback=str2type.ext.click_cb_key_val,
+    multiple=True, help="Output raster creation options."
 )
 @click.option(
-    '-ot', '--output-type', type=click.Choice(rio_dtypes.typename_fwd.values()), metavar='NAME', default='Float32',
+    '-ot', '--output-type', type=click.Choice(rio.dtypes.typename_fwd.values()),
+    metavar='NAME', default='Float32',
     help="Output raster type.  Defaults to `Float32' but must support the value "
          "accessed by --property if it is supplied."
 )
 @click.option(
     '-tr', '--target-resolution', type=click.FLOAT, multiple=True, required=True,
     help="Target resolution in georeferenced units.  Assumes square pixels unless "
-         "specified twice.  -tr 1 -tr 2 yields pixels that are 1 unit wide and 2 "
+         "specified twice.  `-tr 1 -tr 2` yields pixels that are 1 unit wide and 2 "
          "units tall."
 )
 @click.option(
@@ -119,16 +136,6 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
         Assertion failed: (0), function query, file AbstractSTRtree.cpp, line 285.
         Abort trap: 6
     """
-
-    target_resolution = [abs(v) for v in target_resolution]
-    if len(target_resolution) is 1:
-        x_res = target_resolution[0]
-        y_res = target_resolution[0]
-    elif len(target_resolution) is 2:
-        x_res, y_res = target_resolution
-    else:
-        raise ValueError("Can only specify target resolution twice - receive %s values: %s"
-                         % (len(target_resolution), target_resolution))
 
     with fio.open(infile, layer=layer_name) as src:
 

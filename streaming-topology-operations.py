@@ -8,11 +8,15 @@ to stdout.  See main() docstring for more info.
 
 
 import json
+import logging
 import sys
 
 import click
 import shapely.geometry
 from str2type import str2type
+
+
+log = logging.getLogger('streaming-topology-operations')
 
 
 @click.command()
@@ -111,11 +115,9 @@ def main(topology_operation, skip_failures):
 
         except Exception as e:
             if not skip_failures:
-                raise e  # Don't skip failures
+                raise e
             else:
-                click.echo("Exception on row %s - %s" % (idx, e), err=True)
-
-    sys.exit(0)
+                log.exception("Exception on row %s - %s" % (idx, e))
 
 
 if __name__ == '__main__':

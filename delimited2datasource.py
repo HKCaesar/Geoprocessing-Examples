@@ -3,14 +3,13 @@
 
 """
 Convert data read by something like csv.DictReader to GeoJSON on the fly.
-
-Names are overly verbose for ease of following what does what.
 """
 
 
 import csv
 import logging
 import json
+from os.path import basename
 import sys
 
 import click
@@ -18,6 +17,9 @@ import fiona
 import fiona.transform
 import shapely.geometry
 import shapely.wkt
+
+
+logger = logging.getLogger(basename(__file__))
 
 
 # Some OGR fields can contain valid data the exceeds the default CSV field size
@@ -174,15 +176,15 @@ def dict_reader_as_geojson(dict_reader, geomtype_field, properties=None, skip_fa
         A GeoJSON feature.
     """
 
-    _allowed_geomtypes = ('wkt', 'geojson', 'xy')
+    allowed_geomtypes = ('wkt', 'geojson', 'xy')
 
     # Parse the geometry field definition
     geom_type, geometry_field = geomtype_field.split(':')
     geom_type = geom_type.lower()
     
     # Fail fast in case streaming from a large file
-    if geom_type not in _allowed_geomtypes:
-        raise ValueError("Invalid geometry type - must be one of: {gt}".format(gt=_allowed_geomtypes))
+    if geom_type not in allowed_geomtypes:
+        raise ValueError("Invalid geometry type - must be one of: {gt}".format(gt=allowed_geomtypes))
     elif geom_type == 'xy' and ',' not in geometry_field:
         raise ValueError("Geometry type is 'xy' and ',' does not appear in fieldnames: %s" % geometry_field)
 
@@ -258,7 +260,7 @@ def _newlinejson_reader(infile):
 @click.argument('infile', type=click.File(mode='r'), required=True)
 @click.argument('outfile', required=True)
 @click.option(
-    '-sf', '--skip-failures', is_flag=True, type=click.BOOL,
+    '--skip-failures', is_flag=True, type=click.BOOL,
     help="Skip failures encountered on read and write."
 )
 @click.option(
@@ -266,15 +268,15 @@ def _newlinejson_reader(infile):
     help="Input data format."
 )
 @click.option(
-    '-f', '--format', '--driver', metavar='NAME',
+    '--format', '--driver', metavar='NAME',
     help="Output driver name."
 )
 @click.option(
-    '-gf', '--geometry-field', metavar='NAME', required=True,
+    '-f', '--geometry-field', metavar='NAME', required=True,
     help="Geometry field definition as `format:field'."
 )
 @click.option(
-    '-co', '--creation-option', metavar='NAME=VAL', multiple=True,
+    '-c', '--creation-option', metavar='NAME=VAL', multiple=True,
     help="Driver specific creation option as key=val."
 )
 @click.option(
@@ -282,23 +284,23 @@ def _newlinejson_reader(infile):
     help="Schema property as field=def."
 )
 @click.option(
-    '-s-crs', '--src_crs', metavar='CRS_DEF',
+    '--src-crs', metavar='CRS_DEF',
     help="Specify CRS of input data."
 )
 @click.option(
-    '-d-crs', '--dst_crs', metavar='CRS_DEF',
+    '--dst-crs', metavar='CRS_DEF',
     help="Specify CRS of output data."
 )
 @click.option(
-    '-sl', '--skip-lines', metavar='N', type=click.INT, default=0,
+    '--skip-lines', metavar='N', type=click.INT, default=0,
     help="Skip N lines."
 )
 @click.option(
-    '-ss', '--subsample', metavar='N', type=click.INT, default=0,
+    '--subsample', metavar='N', type=click.INT, default=0,
     help="Only process N lines."
 )
 @click.option(
-    '-gt', '--geometry-type', metavar='TYPE',
+    '-g', '--geometry-type', metavar='TYPE',
     help="Specify geometry type for output layer."
 )
 def main(infile, outfile, creation_option, skip_failures, reader, driver, geometry_field, property_definition,
@@ -345,10 +347,6 @@ def main(infile, outfile, creation_option, skip_failures, reader, driver, geomet
             else:
                 yield item
 
-    if outfile == '-' and driver is not None or len(creation_option) > 0:
-        click.echo("ERROR: Cannot specify driver or creation options if printing to stdout.", err=True)
-        sys.exit(1)
-
     # Convert the input file into an iterable object
     if reader == 'csv':
         reader = csv.DictReader(infile)
@@ -357,7 +355,7 @@ def main(infile, outfile, creation_option, skip_failures, reader, driver, geomet
     elif reader == 'newlinejson':
         reader = _newlinejson_reader(infile)
     else:
-        raise ValueError("Invalid reader: `%s'" % reader)
+        raise click.ClickException("Invalid reader: `%s'" % reader)
 
     # If the user doesn't supply any properties then the transformer will automatically generate them from the first
     # feature.  The first output GeoJSON feature can be cached and a set of Fiona properties can be constructed from it.
@@ -412,8 +410,8 @@ def main(infile, outfile, creation_option, skip_failures, reader, driver, geomet
                 except Exception as e:
                     if not skip_failures:
                         raise e
-
-    sys.exit(0)
+                    else:
+                        logging.exception(repr(e))
 
 
 if __name__ == '__main__':
