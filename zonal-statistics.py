@@ -4,26 +4,51 @@
 """
 Compute zonal statistics for every feature in a vector datasource across every
 band in a raster datasource.
-
-Names are overly verbose for ease of following what does what.
 """
 
 
 import pprint
-import sys
+import warnings
 
-import affine
 import click
-import fiona
-import fiona.transform
+import fiona as fio
+from fiona.transform import transform_geom
 import numpy as np
-import rasterio
-import rasterio.features
-import rtree.index
-import shapely.geometry
+import rasterio as rio
+from rasterio.features import rasterize
+from shapely.geometry import asShape
 
 
-def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touched=None, custom=None, window_band=0):
+warnings.filterwarnings('ignore')
+
+
+def cb_bands(ctx, param, value):
+
+    """
+    Click callback for parsing and validating `--bands`.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Ignored.
+    param : click.Parameter
+        Ignored.
+    value : str
+        See the decorator for `--bands`.
+
+    Returns
+    -------
+    tuple
+        Band indexes to process.
+    """
+
+    if value is None:
+        return value
+    else:
+        return sorted([int(i) for i in value.split(',')])
+
+
+def zonal_stats_from_raster(vector, raster, bands=None, all_touched=False, custom=None):
 
     """
     Compute zonal statistics for each input feature across all bands of an input
@@ -77,8 +102,6 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
                         'sum': 15689067
                     }
                 },
-                'contained': True,
-                'outside': False
             },
             '1': {
                 'bands': {
@@ -90,16 +113,8 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
                         'sum': 26977532
                     }
                 },
-                'contained': True,
-                'outside': False
             }
         }
-
-    Notes
-    -----
-
-    Features where the `outside` key is `False` will not have any additional keys.
-    The `contained` key will only appear in the output if `contained=True`.
 
     Parameters
     ----------
@@ -114,17 +129,19 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
         Supply custom functions as `{'name': func}`.
     bands : int or list or None, optional
         Bands to compute stats against.  Default is all.
-    contained : bool, optional
-        Specify if geometries should be tested to see if they fall completely
-        within the raster.  Can be a very expensive computation for geometries
-        with a large number of vertexes.  Setting to `False` will yield a
-        performance boost for these situations.
 
     Returns
     -------
     dict
         See 'Example output' above.
     """
+
+    if bands is None:
+        bands = list(range(1, raster.count + 1))
+    elif isinstance(bands, int):
+        bands = [bands]
+    else:
+        bands = sorted(bands)
 
     metrics = {
         'min': lambda x: x.min(),
@@ -140,133 +157,95 @@ def zonal_stats_from_raster(vector, raster, bands=None, contained=True, all_touc
     # Make sure the user gave all callable objects or None
     for name, func in metrics.items():
         if func is not None and not hasattr(func, '__call__'):
-            raise ValueError("Custom function `%s' is not callable: %s" % (name, func))
+            raise click.ClickException(
+                "Custom function `%s' is not callable: %s" % (name, func))
 
-    # User didn't specify which bands - process all
-    if bands is None:
-        bands = range(1, raster.count + 1)
-    elif isinstance(bands, int):
-        bands = [bands]
-    else:
-        bands = sorted(bands)  # Otherwise the output stats could be in the wrong order
+    r_x_min, r_y_min, r_x_max, r_y_max = raster.bounds
 
-    stats = {}
-
-    # Cache raster and vector CRS and generate a raster bbox geometry
-    raster_crs = raster.crs
-    vector_crs = vector.crs
-    _r_min_x, _r_min_y, _r_max_x, _r_max_y = raster.bounds
-    raster_bounds = shapely.geometry.Polygon(
-        [[_r_min_x, _r_min_y], [_r_min_x, _r_max_y], [_r_max_x, _r_max_y], [_r_max_x, _r_min_y]]
-    )
-
-    # Create a spatial index consisting of the raster block's in the coordinate space
-    window_index = rtree.index.Index(interleaved=True)
-    window_ids = {}
-    for idx, block in enumerate(raster.block_windows(window_band)):
-        _row, _col = block[1]
-        row_min, row_max = _row
-        col_min, col_max = _col
-        col_min, row_min = raster.affine * (col_min, row_min)
-        col_max, row_max = raster.affine * (col_max, row_max)
-        window_index.insert(idx, (col_min, row_max, col_max, row_min))
-        window_ids[idx] = block
-
+    feature_stats = {}
     for feature in vector:
 
-        # Reproject feature's geometry to the raster's CRS and convert to a shapely geometry
-        zone_geometry = shapely.geometry.asShape(
-            fiona.transform.transform_geom(vector_crs, raster_crs, feature['geometry'], antimeridian_cutting=True))
+        """
+        rasterize(
+            shapes,
+            out_shape=None,
+            fill=0,
+            out=None,
+            output=None,
+            transform=Affine(1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+            all_touched=False,
+            default_value=1,
+            dtype=None
+        )
+        """
 
-        feature_metrics = {
-            'outside': False
-        }
+        stats = {'bands': {}}
 
-        # Compare feature and raster bboxes to determine if feature is definitely outside.
-        # If outside, no need to process.
-        if not zone_geometry.intersects(raster_bounds):
-            feature_metrics['outside'] = True
-            stats[feature['id']] = feature_metrics
+        reproj_geom = asShape(transform_geom(
+            vector.crs, raster.crs, feature['geometry'], antimeridian_cutting=True))
+        x_min, y_min, x_max, y_max = reproj_geom.bounds
+
+        if (r_x_min <= x_min <= x_max <= r_x_max) and (r_y_min <= y_min <= y_max <= r_y_max):
+            stats['contained'] = True
         else:
+            stats['contained'] = False
 
-            feature_metrics['bands'] = {}
+        col_min, row_max = ~raster.affine * (x_min, y_min)
+        col_max, row_min = ~raster.affine * (x_max, y_max)
+        window = ((row_min, row_max), (col_min, col_max))
 
-            # Figure out if the geometry is completely contained within the raster
-            if contained:
-                feature_metrics['contained'] = raster_bounds.contains(zone_geometry)
+        rasterized = rasterize(
+            shapes=[reproj_geom],
+            out_shape=(row_max - row_min, col_max - col_min),
+            fill=1,
+            transform=raster.window_transform(window),
+            all_touched=all_touched,
+            default_value=0,
+            dtype=rio.ubyte
+        ).astype(np.bool)
 
-            # Collect all intersecting windows and create a new overall window
-            # This new window is used to read a raster subset
-            intersecting_windows = np.array(
-                [i[1] for i in [window_ids[id] for id in window_index.intersection(zone_geometry.bounds)]])
-            min_col = intersecting_windows[:, 0].min()
-            max_col = intersecting_windows[:, 0].max()
-            min_row = intersecting_windows[:, 1].min()
-            max_row = intersecting_windows[:, 1].max()
-            subset_window = ((min_col, max_col), (min_row, max_row))
+        for bidx in bands:
 
-            # Only the bands the user is interested in computing stats against are extracted
-            # Be sure to create a new affine transformation with the upper left coordinates
-            # for the subset raster
+            stats['bands'][bidx] = {}
 
-            raster_subset = raster.read(bands, window=subset_window)
-            if not isinstance(raster_subset, np.ma.MaskedArray):
-                raster_subset = np.ma.MaskedArray(raster_subset)
-            _subset_ul_x, _subset_ul_y = raster.affine * (min_row, min_col)
-            subset_affine = affine.Affine(
-                raster.affine.a, raster.affine.b, _subset_ul_x,
-                raster.affine.d, raster.affine.e, _subset_ul_y)
+            data = raster.read(indexes=bidx, window=window, boundless=True, masked=True)
 
-            # Rasterize the geometry and convert to a boolean array
-            rasterized = rasterio.features.rasterize([shapely.geometry.mapping(zone_geometry)],
-                                                     out_shape=raster_subset[0].shape,
-                                                     transform=subset_affine,
-                                                     all_touched=all_touched).astype(np.bool)
+            # This should be a masked array, but a bug requires us to build our own:
+            # https://github.com/mapbox/rasterio/issues/338
+            if not isinstance(data, np.ma.MaskedArray):
+                data = np.ma.array(data, mask=data == raster.nodata)
 
-            # Compute stats for all specified bands
-            # np_bidx is zero indexing
-            band_map = dict(zip(bands, range(raster_subset.shape[0])))
-            for bidx in bands:
+            data.mask += rasterized
 
-                np_bidx = band_map[bidx]
+            for name, func in metrics.items():
+                if func is not None:
+                    stats['bands'][bidx][name] = func(data)
 
-                # Update mask and compute metrics
-                masked_subset = np.ma.masked_array(
-                    raster_subset[np_bidx].data, mask=raster_subset[np_bidx].mask + ~rasterized)
-                feature_metrics['bands'][bidx] = {}
-                for name, func in metrics.items():
-                    if func is not None:
-                        feature_metrics['bands'][bidx][name] = func(masked_subset)
+            feature_stats[feature['id']] = stats
 
-                stats[feature['id']] = feature_metrics.copy()
-
-    return stats
+    return feature_stats
 
 
 @click.command()
 @click.argument('raster')
 @click.argument('vector')
 @click.option(
-    '-b', '--bands',
-    help="Bands to process as `1' or `1,2,3'."
+    '-b', '--bands', callback=cb_bands,
+    help="Bands to process as `1` or `1,2,3`."
 )
 @click.option(
-    '-at', '--all-touched', is_flag=True,
+    '-a', '--all-touched', is_flag=True,
     help="Enable 'all-touched' rasterization."
 )
 @click.option(
-    '-c', '--contained', is_flag=True,
-    help="Enable 'contained' test."
-)
-@click.option(
-    '-npp', '--no-pretty-print', is_flag=True,
+    '-n', '--no-pretty-print', is_flag=True,
     help="Print stats JSON on one line."
 )
 @click.option(
     '--indent', type=click.INT, default=0,
     help="Pretty print indent."
 )
-def main(raster, vector, bands, contained, all_touched, no_pretty_print, indent):
+def main(raster, vector, bands, all_touched, no_pretty_print, indent):
 
     """
     Get raster stats for every feature in a vector datasource.
@@ -277,25 +256,21 @@ def main(raster, vector, bands, contained, all_touched, no_pretty_print, indent)
         $ zonal-statistics.py sample-data/NAIP.tif \\
             sample-data/polygon-samples.geojson -b 1,2
     \b
-    Compute against all bands and also perform a check to see if a geometry is
-    completely contained within the raster bbox:
-    \b
-        $ zonal-statistics.py sample-data/NAIP.tif \\
-            sample-data/polygon-samples.geojson --contained
     """
 
-    if bands is not None:
-        bands = sorted([int(i) for i in bands.split(',')])
+    with fio.drivers(), rio.drivers():
+        with rio.open(raster) as src_r, fio.open(vector) as src_v:
 
-    with fiona.drivers(), rasterio.drivers():
-        with rasterio.open(raster) as src_r, fiona.open(vector) as src_v:
+            if not bands:
+                bands = list(range(1, src_r.count + 1))
 
-            results = zonal_stats_from_raster(src_v, src_r, bands=bands, contained=contained, all_touched=all_touched)
+            results = zonal_stats_from_raster(
+                src_v, src_r, bands=bands, all_touched=all_touched)
+
             if not no_pretty_print:
                 results = pprint.pformat(results, indent=indent)
-            click.echo(results)
 
-    sys.exit(0)
+            click.echo(results)
 
 
 if __name__ == '__main__':
