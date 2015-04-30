@@ -225,7 +225,7 @@ def main(infile, outfile, creation_option, driver_name, output_type, resolution,
 
                     block_affine = dst.window_transform(window)
 
-                    data = np.zeros((row_max - row_min, col_max - col_min))
+                    data = np.zeros((row_max - row_min, col_max - col_min), dtype=dst.meta['dtype'])
 
                     for feat in src.filter(bbox=(x_min, y_min, x_max, y_max)):
                         if property_name is None:
@@ -243,7 +243,7 @@ def main(infile, outfile, creation_option, driver_name, output_type, resolution,
                             all_touched=all_touched,
                             default_value=add_val,
                             dtype=rio.float64
-                        )
+                        ).astype(dst.meta['dtype'])
                     dst.write(data.astype(dst.meta['dtype']), indexes=1, window=window)
 
 
