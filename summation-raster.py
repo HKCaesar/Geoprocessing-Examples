@@ -13,7 +13,7 @@ import click
 import fiona as fio
 import numpy as np
 import rasterio as rio
-import rasterio.dtypes as rio_dtypes
+import rasterio.dtypes
 from rasterio.features import rasterize
 import str2type.ext
 
@@ -88,7 +88,7 @@ def cb_bbox(ctx, param, value):
 @click.argument('infile')
 @click.argument('outfile')
 @click.option(
-    '-f', '--format', '--driver', 'driver_name', metavar='NAME', default='GTiff',
+    '-f', '--format', 'driver_name', metavar='NAME', default='GTiff',
     help="Output raster driver."
 )
 @click.option(
