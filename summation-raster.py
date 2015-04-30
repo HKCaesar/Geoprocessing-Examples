@@ -8,14 +8,80 @@ Compute a density raster for input geometries or sum a property.
 
 from __future__ import division
 
-import click
 import affine
+import click
 import fiona as fio
 import numpy as np
 import rasterio as rio
 import rasterio.dtypes as rio_dtypes
 from rasterio.features import rasterize
-from shapely.geometry import asShape
+import str2type.ext
+
+
+def cb_res(ctx, param, value):
+
+    """
+    Click callback to handle ``--resolution`` syntax and validation.
+
+    Parameter
+    ---------
+    ctx : click.Context
+        Ignored
+    param : click.Parameter
+        Ignored
+    value : tuple
+        Tuple of values from each instance of `--resolution`.
+
+    Returns
+    -------
+    tuple
+        First element is pixel x size and second is pixel y size.
+    """
+
+    if len(value) > 2:
+        raise click.BadParameter('target can only be specified once or twice.')
+    elif len(value) is 2:
+        return tuple(abs(v) for v in value)
+    elif len(value) is 1:
+        return value[0], value[0]
+    else:
+        raise click.BadParameter('bad syntax: {0}'.format(value))
+
+
+def cb_bbox(ctx, param, value):
+
+    """
+    Click callback to handle ``--bbox`` syntax and validation.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Ignored.
+    param : click.Parameter
+        Ignored.
+    value : tuple
+        x_min, y_min, x_max, y_max
+
+    Raises
+    ------
+    click.BadParameter
+
+    Returns
+    -------
+    tuple
+        (x_min, y_min, x_max, y_max)
+    """
+
+    if not value:
+        return None
+
+    bbox = value
+    x_min, y_min, x_max, y_max = bbox
+
+    if (x_max < x_min) or (y_max < y_min):
+        raise click.BadParameter('min exceeds max for one or more dimensions: {0}'.format(' '.join(bbox)))
+
+    return bbox
 
 
 @click.command()
@@ -26,19 +92,20 @@ from shapely.geometry import asShape
     help="Output raster driver."
 )
 @click.option(
-    '-co', '--creation-option', metavar='NAME=VAL', multiple=True,
-    help="Output raster creation options."
+    '-c', '--creation-option', metavar='NAME=VAL', multiple=True,
+    callback=str2type.ext.click_cb_key_val, help="Output raster creation options."
 )
 @click.option(
-    '-ot', '--output-type', type=click.Choice(rio_dtypes.typename_fwd.values()), metavar='NAME', default='Float32',
+    '-t', '--output-type', type=click.Choice(rio_dtypes.typename_fwd.values()),
+    metavar='NAME', default='Float32',
     help="Output raster type.  Defaults to `Float32' but must support the value "
          "accessed by --property if it is supplied."
 )
 @click.option(
-    '-tr', '--target-resolution', type=click.FLOAT, multiple=True, required=True,
-    help="Target resolution in georeferenced units.  Assumes square pixels unless "
-         "specified twice.  -tr 1 -tr 2 yields pixels that are 1 unit wide and 2 "
-         "units tall."
+    '-r', '--resolution', type=click.FLOAT, multiple=True, required=True,
+    callback=cb_res, help="Target resolution in georeferenced units.  Assumes square "
+                          "pixels unless specified twice.  -tr 1 -tr 2 yields pixels "
+                          "that are 1 unit wide and 2 units tall."
 )
 @click.option(
     '-n', '--nodata', type=click.FLOAT, default=0.0,
@@ -53,11 +120,15 @@ from shapely.geometry import asShape
     help="Property to sum.  Defaults to density."
 )
 @click.option(
-    '-at', '--all-touched', is_flag=True,
-    help="Enable all touched rasterization for non-point layers."
+    '-a', '--all-touched', is_flag=True,
+    help="Enable all touched rasterization."
 )
-def main(infile, outfile, creation_option, driver_name, output_type, target_resolution, nodata, layer_name,
-         property_name, all_touched):
+@click.option(
+    '--bbox', metavar='X_MIN Y_MIN X_MAX Y_MAX', nargs=4, callback=cb_bbox,
+    help='Only process data within the specified bounding box.'
+)
+def main(infile, outfile, creation_option, driver_name, output_type, resolution, nodata, layer_name,
+         property_name, all_touched, bbox):
 
     """
     Creation a geometry density map or sum a property.
@@ -103,13 +174,13 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
     \b
         $ summation-raster.py sample-data/point-sample.geojson OUT.tif \\
             --creation-option TILED=YES \\
-            --target-resolution 10
+            --resolution 10
     \b
     Sum a property at a 100 meter resolution
     \b
         $ summation-raster.py sample-data/point-sample.geojson OUT.tif \\
             --creation-option TILED=YES \\
-            --target-resolution 100 \\
+            --resolution 100 \\
             --property ID
 
     \b
@@ -120,24 +191,15 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
         Abort trap: 6
     """
 
-    target_resolution = [abs(v) for v in target_resolution]
-    if len(target_resolution) is 1:
-        x_res = target_resolution[0]
-        y_res = target_resolution[0]
-    elif len(target_resolution) is 2:
-        x_res, y_res = target_resolution
-    else:
-        raise ValueError("Can only specify target resolution twice - receive %s values: %s"
-                         % (len(target_resolution), target_resolution))
+    x_res, y_res = resolution
 
     with fio.open(infile, layer=layer_name) as src:
 
-        # Fail fasts
         if property_name is not None and src.schema['properties'][property_name].split(':')[0] == 'str':
-            raise TypeError("Property `%s' is an invalid type for summation: `%s'"
-                            % (property_name, src.schema['properties'][property_name]))
+            raise click.BadParameter("Property `%s' is an invalid type for summation: `%s'"
+                                     % (property_name, src.schema['properties'][property_name]))
 
-        v_x_min, v_y_min, v_x_max, v_y_max = src.bounds
+        v_x_min, v_y_min, v_x_max, v_y_max = src.bounds if not bbox else bbox
         raster_meta = {
             'count': 1,
             'crs': src.crs,
@@ -149,65 +211,40 @@ def main(infile, outfile, creation_option, driver_name, output_type, target_reso
             'nodata': nodata
         }
         raster_meta['transform'] = raster_meta['affine']
-        raster_meta.update(**{co.split('=')[0]: co.split('=')[1] for co in creation_option})
+        raster_meta.update(**creation_option)
 
         with rio.open(outfile, 'w', **raster_meta) as dst:
 
-            num_blocks = len([_ for _ in dst.block_windows()])
-
+            num_blocks = len([bw for bw in dst.block_windows()])
             with click.progressbar(dst.block_windows(), length=num_blocks) as block_windows:
+                for _, window in block_windows:
 
-                for pos, ((row_min, row_max), (col_min, col_max)) in block_windows:
+                    ((row_min, row_max), (col_min, col_max)) = window
                     x_min, y_min = dst.affine * (col_min, row_max)
                     x_max, y_max = dst.affine * (col_max, row_min)
 
-                    block = np.zeros((row_max - row_min, col_max - col_min))
+                    block_affine = dst.window_transform(window)
 
-                    for feature in src.filter(bbox=(x_min, y_min, x_max, y_max)):
+                    data = np.zeros((row_max - row_min, col_max - col_min))
 
-                        if property_name is not None:
-                            add_val = feature['properties'][property_name]
+                    for feat in src.filter(bbox=(x_min, y_min, x_max, y_max)):
+                        if property_name is None:
+                            add_val = 1
+                        else:
+                            add_val = feat['properties'][property_name]
                             if add_val is None:
                                 add_val = 0
-                        else:
-                            add_val = 1
 
-                        geom_type = feature['geometry']['type']
-                        if 'Point' in geom_type:
-                            for point in feature['geometry']['coordinates'] if geom_type == 'MultiPoint' else [feature['geometry']['coordinates']]:
-                                point_col, point_row = (int(_i) for _i in ~dst.affine * point[:2])
-                                block[point_row - row_min][point_col - col_min] += add_val
-                        else:
-                            for geometry in feature['geometry']['coordinates'] if 'Multi' in geom_type else [feature['geometry']]:
-
-                                # Clip the input geometry to the raster block window
-                                window_geometry = asShape({
-                                        'type': 'Polygon',
-                                        'coordinates': [[[x_min, y_min], [x_min, y_max], [x_max, y_max], [x_max, y_min]]]
-                                    })
-                                g = asShape(geometry)
-                                if g.intersects(window_geometry):
-                                    clipped = window_geometry.union(g)
-
-                                    # Create a new affine transformation for this subset window
-                                    _subset_ul_x, _subset_ul_y = dst.affine * (row_min, col_min)
-                                    subset_affine = affine.Affine(
-                                        dst.affine.a, dst.affine.b, _subset_ul_x,
-                                        dst.affine.d, dst.affine.e, _subset_ul_y)
-
-                                    # Rasterize polygon
-                                    rasterized = rasterize(
-                                        shapes=[clipped],
-                                        out_shape=block.shape,
-                                        transform=subset_affine,
-                                        all_touched=all_touched,
-                                        default_value=1 if property_name is None else feature['properties'][property_name],
-                                        dtype=dst.meta['dtype']
-                                    )
-
-                                    block += rasterized
-                        block[block == 0.0] = nodata
-                        dst.write_band(1, block.astype(dst.meta['dtype']), window=((row_min, row_max), (col_min, col_max)))
+                        data += rasterize(
+                            shapes=[feat['geometry']],
+                            out_shape=data.shape,
+                            fill=dst.nodata,
+                            transform=block_affine,
+                            all_touched=all_touched,
+                            default_value=add_val,
+                            dtype=rio.float64
+                        )
+                    dst.write(data.astype(dst.meta['dtype']), indexes=1, window=window)
 
 
 if __name__ == '__main__':
